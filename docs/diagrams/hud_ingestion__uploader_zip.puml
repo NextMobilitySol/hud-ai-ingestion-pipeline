@@ -1,0 +1,71 @@
+@startuml hud_ingestion__uploader_zip
+title Data Engineering Pipeline - Ingesta de ZIPs
+
+actor "Productor de Datos\n(Usuario / Proceso Externo)" as Source
+participant "Ingestion Job\n(uploader.py)" as Ingest
+database "Data Lake\n(GCS - Landing Zone)" as Lake
+collections "Audit Logs\n(Metadata Layer)" as Logs
+database "Data Warehouse\n(BigQuery - Curated Zone)" as DWH
+
+== RAW DATA ==
+Source -> Ingest : Entrega ZIP local (raw data)
+note right of Source
+Datos crudos fuera de la nube
+Formato: archivo ZIP con imágenes
+end note
+
+== INGESTION LAYER ==
+Ingest -> Ingest : Data Validation
+note right of Ingest
+• Cálculo de hash (sha256)
+• Tamaño en bytes
+• Conteo de imágenes válidas
+→ Garantiza calidad e integridad
+end note
+
+Ingest -> Ingest : Data Enrichment (si origen=YouTube)
+note right of Ingest
+• Extrae metadatos externos
+(video_id, título, canal, fecha, licencia)
+→ Aumenta valor del dataset
+end note
+
+== LANDING ZONE (Data Lake) ==
+Ingest -> Lake : Persistencia del ZIP
+note right of Lake
+• Archivo crudo se guarda en GCS
+• Prefijo: archive/<zip_name>
+• Metadata técnica y de origen asociada al objeto
+→ Fuente de verdad inmutable
+end note
+
+== METADATA LAYER ==
+Ingest -> Logs : Escritura de Audit Log JSON
+note right of Logs
+• Evento de ingesta
+• Ruta en GCS
+• Origen, dataset lógico
+• Hash, tamaño, num_images
+• Timestamp y versión del uploader
+→ Auditabilidad y lineage
+end note
+
+== CURATED ZONE (Data Warehouse) ==
+Ingest -> DWH : Upsert de registro (archives_index)
+note right of DWH
+• Registro único por ZIP (sha256)
+• Metadatos enriquecidos (YouTube si aplica)
+• Flags de control: exists_in_gcs, active
+• Dataset lógico asociado
+→ Tabla indexada para búsqueda y analítica
+end note
+
+== FEEDBACK ==
+Ingest -> Source : Notificación de éxito o error
+note right of Ingest
+• [OK] ZIP registrado
+• [SKIP] duplicado
+• [ERROR] conflicto o fallo
+end note
+
+@enduml
