@@ -232,6 +232,7 @@ def main() -> None:
     )
 
     # Escritura en BigQuery: reactivar o insertar
+    # Escritura en BigQuery: reactivar o insertar
     if prev_rows and prev_is_deleted is True:
         # Soft-delete: Ya existe un registro previo del mismo sha pero está marcado como eliminado, la reactivamos
         has_yt = bool(youtube)
@@ -245,49 +246,71 @@ def main() -> None:
             bigquery.ScalarQueryParameter("dataset", "STRING", dataset),
             bigquery.ScalarQueryParameter("nimg", "INT64", num_images),
             bigquery.ScalarQueryParameter("ts", "TIMESTAMP", ts_ingest),
-            bigquery.ScalarQueryParameter("has_yt", "BOOL", has_yt),
             bigquery.ScalarQueryParameter("sha", "STRING", sha256_zip),
         ]
 
-        # Si hay YouTube, preparamos @yt como STRUCT y añadimos el parámetro
         if has_yt:
             yt_publish_date_date = None
             if youtube.get("publish_date"):
-                yt_publish_date_date = datetime.date.fromisoformat(youtube["publish_date"])
+                try:
+                    yt_publish_date_date = datetime.date.fromisoformat(youtube["publish_date"])
+                except ValueError:
+                    yt_publish_date_date = None
+
+            # StructQueryParameter SIN lista (args posicionales)
             yt_param = bigquery.StructQueryParameter(
                 "yt",
-                [
-                    bigquery.ScalarQueryParameter("video_id", "STRING", youtube.get("video_id")),
-                    bigquery.ScalarQueryParameter("title", "STRING", youtube.get("title")),
-                    bigquery.ScalarQueryParameter("channel", "STRING", youtube.get("channel")),
-                    bigquery.ScalarQueryParameter("publish_date", "DATE", yt_publish_date_date),
-                    bigquery.ScalarQueryParameter("license", "STRING", youtube.get("license")),
-                ],
+                bigquery.ScalarQueryParameter("video_id", "STRING", youtube.get("video_id")),
+                bigquery.ScalarQueryParameter("title", "STRING", youtube.get("title")),
+                bigquery.ScalarQueryParameter("channel", "STRING", youtube.get("channel")),
+                bigquery.ScalarQueryParameter("publish_date", "DATE", yt_publish_date_date),
+                bigquery.ScalarQueryParameter("license", "STRING", youtube.get("license")),
             )
-            params.append(yt_param)  # solo añadimos @yt si has_yt=True
-            bq.query(
-                f"""
-                UPDATE `{table_ref_full}`
-                SET is_deleted = FALSE,
-                    ts_deleted = NULL,
-                    delete_reason = NULL,
-                    deleted_by = NULL,
-                    exists_in_gcs = TRUE,
-                    gcs_generation_last = @gen,
-                    gcs_uri = @uri,
-                    zip_name = @zip,
-                    origin = @origin,
-                    source_url = @src,
-                    dataset = @dataset,
-                    num_images = @nimg,
-                    ts_ingest = @ts,
-                    -- clave: si no hay youtube, forzamos NULL; si hay, asignamos el STRUCT @yt
-                    youtube = IF(@has_yt, @yt, NULL)
-                WHERE sha256_zip = @sha
-                AND COALESCE(is_deleted, FALSE) = TRUE
-                """,
-                job_config=bigquery.QueryJobConfig(query_parameters=params),
-            ).result()
+            params.append(yt_param)
+
+            sql = f"""
+            UPDATE `{table_ref_full}`
+            SET is_deleted = FALSE,
+                ts_deleted = NULL,
+                delete_reason = NULL,
+                deleted_by = NULL,
+                exists_in_gcs = TRUE,
+                gcs_generation_last = @gen,
+                gcs_uri = @uri,
+                zip_name = @zip,
+                origin = @origin,
+                source_url = @src,
+                dataset = @dataset,
+                num_images = @nimg,
+                ts_ingest = @ts,
+                youtube = @yt
+            WHERE sha256_zip = @sha
+              AND COALESCE(is_deleted, FALSE) = TRUE
+            """
+        else:
+            # Versión sin @yt
+            sql = f"""
+            UPDATE `{table_ref_full}`
+            SET is_deleted = FALSE,
+                ts_deleted = NULL,
+                delete_reason = NULL,
+                deleted_by = NULL,
+                exists_in_gcs = TRUE,
+                gcs_generation_last = @gen,
+                gcs_uri = @uri,
+                zip_name = @zip,
+                origin = @origin,
+                source_url = @src,
+                dataset = @dataset,
+                num_images = @nimg,
+                ts_ingest = @ts,
+                youtube = NULL
+            WHERE sha256_zip = @sha
+              AND COALESCE(is_deleted, FALSE) = TRUE
+            """
+
+        bq.query(sql, job_config=bigquery.QueryJobConfig(query_parameters=params)).result()
+
     else:
         # No existe registro previo, insertamos una nueva fila
         row = {
