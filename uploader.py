@@ -308,10 +308,12 @@ def main() -> None:
             "deleted_by": None,
             "gcs_generation_last": generation,
         }
-        table_id = bq.dataset(DATASET).table(TABLE)
-        errors = bq.insert_rows_json(table_id, [row])
-        if errors:
-            print(f"[ERROR] BigQuery insert: {errors}", file=sys.stderr)
+        job_cfg = bigquery.LoadJobConfig(write_disposition="WRITE_APPEND")
+        load_job = bq.load_table_from_json([row], table_ref_full, job_config=job_cfg)
+        load_job.result()  # Espera a que termine el job
+
+        if load_job.errors:
+            print(f"[ERROR] BigQuery load job: {load_job.errors}", file=sys.stderr)
             sys.exit(4)
 
     print(f"[OK] Uploaded and recorded: {gcs_uri}")

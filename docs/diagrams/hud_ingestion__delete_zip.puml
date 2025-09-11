@@ -1,0 +1,34 @@
+@startuml hud_ingestion__delete_zip
+title Safe Delete Pipeline
+
+actor "Operador / Scheduler"
+participant "delete_zip.py\n(Orchestrator)"
+database "Data Lake (GCS)\nLanding Zone"
+database "Data Warehouse (BigQuery)\nCurated Index"
+collections "Audit Logs (GCS)\nMetadata Layer"
+
+== 1. Trigger ==
+Operador -> Orchestrator : Ejecuta delete_zip.py --zip <file>\n(reason, who)
+
+== 2. Hard-Delete ==
+Orchestrator -> "Data Lake (GCS)\nLanding Zone" : Borrar objeto (si existe)
+note right
+Elimina ZIP físico en GCS
+end note
+
+== 3. Soft-Delete ==
+Orchestrator -> "Data Warehouse (BigQuery)\nCurated Index" : UPDATE fila activa\nis_deleted=TRUE, exists_in_gcs=FALSE
+note right
+Histórico conservado\nGovernance aplicado
+end note
+
+== 4. Audit Trail ==
+Orchestrator -> "Audit Logs (GCS)\nMetadata Layer" : Escribe JSON con evento delete
+note right
+Trazabilidad de quién, cuándo, por qué
+end note
+
+== 5. Feedback ==
+Orchestrator -> Operador : OK / NOT FOUND / WARN
+
+@enduml
