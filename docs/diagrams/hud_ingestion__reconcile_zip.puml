@@ -1,0 +1,38 @@
+@startuml hud_reconcile_simple
+title Reconcile de ZIPs — Alinear Archivos (GCS) e Índice (BigQuery)
+
+actor "Operador/Scheluder" as Orq
+participant "reconcile.py\n(verifica y corrige)" as Job
+database "GCS\narchive/<categoría>/**" as GCS
+database "BigQuery\narchives_index" as BQ
+collections "Logs\nlogs/archive_reconcile/" as Logs
+
+note over Job
+Propósito: detectar diferencias entre lo que
+EXISTE en GCS y lo que DICE BigQuery, 
+corregir lo seguro y registrar el resto.
+end note
+
+Orq -> Job : Ejecutar [--dry-run | --upload-log | --include-deleted | --reactivate-deleted]
+Job -> GCS : Listar archivos ZIP (todas las categorías)
+Job -> BQ  : Leer filas activas\n(opt: también borradas si --include-deleted)
+Job -> Job : Agrupar por nombre (basename) y detectar duplicados
+
+alt A) Duplicado en GCS (mismo nombre en ≥2 carpetas)
+  Job -> Logs : ambiguous_in_gcs (no tocar BQ)
+else B) Activo en BQ pero NO está en GCS
+  Job -> BQ  : Soft-delete (is_deleted=TRUE, exists_in_gcs=FALSE, reason)
+else C) Está en GCS y flags/URI mal en BQ
+  Job -> BQ  : Corregir exists_in_gcs=TRUE, gcs_uri=real, generation
+else D) Marcado borrado en BQ pero SÍ está en GCS
+  alt --reactivate-deleted
+    Job -> BQ : Reactivar (is_deleted=FALSE, limpiar motivos, alinear URI)
+  else
+    Job -> Logs : deleted_but_exists (solo informe)
+  end
+else E) Archivo en GCS sin fila activa en BQ
+  Job -> Logs : untracked_in_bq (solo informe)
+end
+
+Job -> Logs : Guardar reporte (summary + details) si --upload-log
+@enduml
