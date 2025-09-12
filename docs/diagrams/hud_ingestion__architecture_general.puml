@@ -1,0 +1,109 @@
+@startuml hud_architecture_general
+title Data Architecture — Lake (GCS) ⇄ Warehouse (BigQuery)
+
+' Layout limpio
+left to right direction
+skinparam dpi 160
+skinparam shadowing false
+skinparam componentStyle rectangle
+skinparam packageStyle rectangle
+skinparam ArrowColor #333
+
+'=== Roles ===
+actor "Data Producers" as PROD
+actor "Data Steward / Orchestrator" as ORCH
+actor "Data Consumers" as CONS
+
+'=== Procesos (terminología de Data Engineering / DB Mgmt) ===
+rectangle "Ingestion (ETL/ELT)\n• Extract ZIP\n• Load to Lake\n• Register Metadata" as ING
+rectangle "Lifecycle Management\n(Safe Deletion / Retention)" as LCM
+rectangle "Reconciliation\n(Data Quality & Sync)" as REC
+
+'=== Almacenes ===
+package "Data Lake (GCS)" as LAKE {
+  folder "archive/<category>/**\n(public | simulated | real | youtube)" as ARCH
+  folder "Audit Logs (JSON)\n• archive_ingest/\n• archive_delete/\n• archive_reconcile/" as LOGS
+}
+
+package "Data Warehouse (BigQuery)" as WH {
+  database "archives_index\n(Logical Index / Catalog)" as BQ
+  frame "Serving Views\n• v_archives_active\n• v_archives_review" as VIEWS
+}
+
+'=== Fuente opcional ===
+cloud "YouTube API\n(video metadata)" as YT
+
+'=== Triggers ===
+ORCH --> ING : schedule / on-demand
+ORCH --> LCM : on-demand
+ORCH --> REC : scheduled (SLA)
+
+'=== Flujos principales (compactos) ===
+PROD --> ING : Provide file (ZIP)
+
+' Ingesta
+ING -[#2f74c0]-> ARCH : Store object\n(Canonical URI)
+ING -[#2f74c0,dashed]-> LOGS : Audit log\n(lineage)
+ING -[#2f74c0,dashed]-> BQ : Upsert record\n(Logical Index)
+ING -[#2f74c0,dotted]-> YT : Enrich metadata\n(if origin=youtube)
+
+' Borrado seguro / ciclo de vida
+LCM -[#c03a2f]-> ARCH : Delete object\n(if exists)
+LCM -[#c03a2f,dashed]-> LOGS : Audit log
+LCM -[#c03a2f,dashed]-> BQ : Soft Delete (Tombstone)\n(is_deleted=TRUE,\nexists_in_gcs=FALSE)
+
+' Reconciliación (DQ & Sync)
+REC -[#2f8f4e]-> ARCH : Enumerate physical\n(basename index)
+REC -[#2f8f4e,dashed]-> BQ : Read logical state\n(active ± tombstoned)
+REC -[#2f8f4e,dashed]-> BQ : Apply safe fixes\n(flags, URI, generation,\nreactivation)
+REC -[#2f8f4e,dashed]-> LOGS : DQ report\n(summary + details)
+
+' Consumo
+CONS -[#666,dashed]-> VIEWS : Read-only\n(analytics / apps)
+
+'=== Notas explicativas (en español, para no técnicos) ===
+note right of ING
+Objetivo (Ingestion):
+• Garantizar que cada archivo quede almacenado en el Lake
+  con una ruta canónica (por categoría).
+• Registrar su “ficha” en el Warehouse (Logical Index)
+  para búsqueda, control y trazabilidad.
+end note
+
+note right of LCM
+Objetivo (Lifecycle Management):
+• Eliminar de forma controlada y auditable.
+• En el Warehouse se marca “Tombstone” (Soft Delete):
+  el histórico se conserva pero deja de estar activo.
+end note
+
+note right of REC
+Objetivo (Reconciliation):
+• Verificar que el estado “físico” (Lake) y “lógico”
+  (Warehouse) estén alineados.
+• Reglas clave (Data Quality):
+  – Ambiguous duplicate: mismo nombre en ≥2 rutas → solo informe.
+  – Missing in Lake: activo en BQ pero no existe → Tombstone.
+  – Canonical URI/flags: corregir exists_in_gcs, URI y generation.
+  – Reactivation: si existe en Lake y estaba Tombstone, reactivar.
+  – Orphan: objeto en Lake sin registro activo → informe.
+end note
+
+note right of BQ
+archives_index (Logical Index):
+• Particionado por DATE(ts_ingest)
+• Cluster por (dataset, origin, zip_name)
+• Campos clave: gcs_uri (Canonical URI), exists_in_gcs,
+  is_deleted (Tombstone), gcs_generation_last, dataset, origin,
+  ts_ingest / ts_deleted, delete_reason, youtube (STRUCT)
+end note
+
+'=== Leyenda ===
+legend right
+**LEGEND — DATA FLOWS**
+• Data Plane (**Solid Arrow**): Objetos y datasets (RAW, GOLD, etc.)
+• Metadata / Control (**Dashed Arrow**): Índices, auditoría, logs, contratos
+• Enrichment (**Dotted Arrow**): Atributos externos (YouTube, Roboflow, APIs)
+endlegend
+
+@enduml
