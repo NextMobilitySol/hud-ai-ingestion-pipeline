@@ -58,7 +58,9 @@ def fetch_youtube_meta(url: str) -> Dict[str, Optional[str]]:
             info = ydl.extract_info(url, download=False)
         video_id = info.get("id") or extract_video_id(url)
         if not video_id:
-            raise ValueError("No se pudo determinar youtube.video_id a partir de la URL.")
+            raise ValueError(
+                "No se pudo determinar youtube.video_id a partir de la URL."
+            )
 
         # Preferimos 'upload_date'; si no, caemos a 'timestamp' (unix)
         publish_date = _to_iso_date(

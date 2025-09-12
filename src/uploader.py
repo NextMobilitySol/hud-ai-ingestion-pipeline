@@ -37,33 +37,38 @@ CATEGORY_PREFIX = {
     "youtube": "youtube/",
 }
 
+
 # Helpers
 def get_bq() -> bigquery.Client:
     if not PROJECT:
         raise RuntimeError("Missing env var GCP_PROJECT.")
     return bigquery.Client(project=PROJECT)
 
+
 def get_gcs() -> storage.Client:
     if not PROJECT:
         raise RuntimeError("Missing env var GCP_PROJECT.")
     return storage.Client(project=PROJECT)
 
+
 # Utilidades
 def sha256_file(path: str) -> str:
-    '''
+    """
     Calcula el hash SHA-256 de un archivo.
-    '''
+    """
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
 
+
 def now_iso_utc() -> str:
-    '''
+    """
     Devuelve la fecha y hora actual en formato ISO 8601 (UTC).
-    '''
+    """
     return datetime.datetime.now(datetime.UTC).isoformat()
+
 
 def count_images_in_zip(zip_path: str) -> int:
     """
@@ -79,6 +84,7 @@ def count_images_in_zip(zip_path: str) -> int:
                 n += 1
     return n
 
+
 def youtube_from_url(url: str) -> Dict[str, Optional[str]]:
     """
     Devuelve metadatos de YouTube a partir de la URL.
@@ -90,6 +96,7 @@ def youtube_from_url(url: str) -> Dict[str, Optional[str]]:
         raise ValueError("Could not determine youtube.video_id from the given URL.")
     return meta
 
+
 # CLI principal
 def main() -> None:
     # Definición de CLI
@@ -97,10 +104,15 @@ def main() -> None:
         description="Upload a ZIP to gs://<bucket>/archive/ with object metadata, log JSON, and BigQuery record."
     )
     parser.add_argument("--zip", required=True, help="Local path to the ZIP file")
-    parser.add_argument("--origin", required=True, choices=ORIGIN_CHOICES,
-                        help="ZIP source type")
-    parser.add_argument("--dataset", default="", help="Dataset logical name (if applicable)")
-    parser.add_argument("--url", default="", help="Source URL (required if origin=youtube)")
+    parser.add_argument(
+        "--origin", required=True, choices=ORIGIN_CHOICES, help="ZIP source type"
+    )
+    parser.add_argument(
+        "--dataset", default="", help="Dataset logical name (if applicable)"
+    )
+    parser.add_argument(
+        "--url", default="", help="Source URL (required if origin=youtube)"
+    )
     args = parser.parse_args()
 
     # Validaciones de entrada
@@ -114,18 +126,26 @@ def main() -> None:
     # Derivados básicos del ZIP
     ts_ingest = now_iso_utc()  # Timestamp de ingestión
     zip_name = os.path.basename(args.zip)  # Nombre del archivo ZIP sin ruta
-    sha256_zip = sha256_file(args.zip)  # Hash SHA-256 del archivo ZIP para deduplicar y auditar contenido
+    sha256_zip = sha256_file(
+        args.zip
+    )  # Hash SHA-256 del archivo ZIP para deduplicar y auditar contenido
     size_bytes = os.path.getsize(args.zip)  # Tamaño del archivo ZIP en bytes
-    num_images = count_images_in_zip(args.zip)  # Conteo de imágenes válidas dentro del ZIP
+    num_images = count_images_in_zip(
+        args.zip
+    )  # Conteo de imágenes válidas dentro del ZIP
 
-    dataset = (args.dataset or "").lower()  # Normalización del nombre del dataset en minúsculas
+    dataset = (
+        args.dataset or ""
+    ).lower()  # Normalización del nombre del dataset en minúsculas
     origin = args.origin
-    dest_prefix = ARCHIVE_PREFIX + CATEGORY_PREFIX[origin] # Prefijo destino en GCS
+    dest_prefix = ARCHIVE_PREFIX + CATEGORY_PREFIX[origin]  # Prefijo destino en GCS
 
     # Clientes GCP
     bq = get_bq()
     gcs = get_gcs()
-    table_ref_full = f"{PROJECT}.{DATASET}.{TABLE}"  # Referencia completa a la tabla de BigQuery
+    table_ref_full = (
+        f"{PROJECT}.{DATASET}.{TABLE}"  # Referencia completa a la tabla de BigQuery
+    )
 
     # Dedupe por sha256_zip
     ## Consulta previa de si existe un registro con ese sha256_zip
@@ -139,7 +159,9 @@ def main() -> None:
             LIMIT 1
             """,
             job_config=bigquery.QueryJobConfig(
-                query_parameters=[bigquery.ScalarQueryParameter("sha", "STRING", sha256_zip)]
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("sha", "STRING", sha256_zip)
+                ]
             ),
         )
     )
@@ -154,7 +176,9 @@ def main() -> None:
     ## Obtener los metadatos y aplicar la regla "1 video -> 1 ZIP"
     youtube: Optional[Dict[str, Any]] = None
     if origin == "youtube":
-        youtube = youtube_from_url(args.url) # {video_id,title,channel,publish_date,license}
+        youtube = youtube_from_url(
+            args.url
+        )  # {video_id,title,channel,publish_date,license}
         clash = list(
             bq.query(
                 f"""
@@ -165,17 +189,26 @@ def main() -> None:
                 LIMIT 1
                 """,
                 job_config=bigquery.QueryJobConfig(
-                    query_parameters=[bigquery.ScalarQueryParameter("vid", "STRING", youtube["video_id"])]
+                    query_parameters=[
+                        bigquery.ScalarQueryParameter(
+                            "vid", "STRING", youtube["video_id"]
+                        )
+                    ]
                 ),
             )
         )
         if clash:
-            print(f"[ERROR] There is already an active ZIP for video_id={youtube['video_id']}.", file=sys.stderr)
+            print(
+                f"[ERROR] There is already an active ZIP for video_id={youtube['video_id']}.",
+                file=sys.stderr,
+            )
             sys.exit(3)
 
     # Subida a GCS con metadata del objeto
     bucket = gcs.bucket(BUCKET)
-    blob = bucket.blob(dest_prefix + zip_name) # Ruta final: archive/<origin>/<zip_name>
+    blob = bucket.blob(
+        dest_prefix + zip_name
+    )  # Ruta final: archive/<origin>/<zip_name>
 
     # Metadata del objeto que se adjunta al objeto de GCS
     metadata = {
@@ -190,13 +223,15 @@ def main() -> None:
     }
     if youtube:
         # Campos de YouTube expandidos como metadata plana (útiles para buscar/filtrar en GCS)
-        metadata.update({
-            "youtube_video_id": youtube.get("video_id") or "",
-            "youtube_title": youtube.get("title") or "",
-            "youtube_channel": youtube.get("channel") or "",
-            "youtube_publish_date": youtube.get("publish_date") or "",
-            "license": youtube.get("license") or "",
-        })
+        metadata.update(
+            {
+                "youtube_video_id": youtube.get("video_id") or "",
+                "youtube_title": youtube.get("title") or "",
+                "youtube_channel": youtube.get("channel") or "",
+                "youtube_publish_date": youtube.get("publish_date") or "",
+                "license": youtube.get("license") or "",
+            }
+        )
 
     # Subida del archivo y escritura de metadata
     blob.metadata = metadata
@@ -227,8 +262,11 @@ def main() -> None:
     }
     # Nombre del log: logs/archive_ingest/<origin>/<zip_name_sin_ext>.json
     logs_prefix_cat = LOGS_PREFIX + CATEGORY_PREFIX[origin]
-    bucket.blob(logs_prefix_cat + os.path.splitext(zip_name)[0] + ".json").upload_from_string(
-        json.dumps(log_doc, ensure_ascii=False, indent=2), content_type="application/json"
+    bucket.blob(
+        logs_prefix_cat + os.path.splitext(zip_name)[0] + ".json"
+    ).upload_from_string(
+        json.dumps(log_doc, ensure_ascii=False, indent=2),
+        content_type="application/json",
     )
 
     # Escritura en BigQuery: reactivar o insertar
@@ -253,18 +291,28 @@ def main() -> None:
             yt_publish_date_date = None
             if youtube.get("publish_date"):
                 try:
-                    yt_publish_date_date = datetime.date.fromisoformat(youtube["publish_date"])
+                    yt_publish_date_date = datetime.date.fromisoformat(
+                        youtube["publish_date"]
+                    )
                 except ValueError:
                     yt_publish_date_date = None
 
             # StructQueryParameter SIN lista (args posicionales)
             yt_param = bigquery.StructQueryParameter(
                 "yt",
-                bigquery.ScalarQueryParameter("video_id", "STRING", youtube.get("video_id")),
+                bigquery.ScalarQueryParameter(
+                    "video_id", "STRING", youtube.get("video_id")
+                ),
                 bigquery.ScalarQueryParameter("title", "STRING", youtube.get("title")),
-                bigquery.ScalarQueryParameter("channel", "STRING", youtube.get("channel")),
-                bigquery.ScalarQueryParameter("publish_date", "DATE", yt_publish_date_date),
-                bigquery.ScalarQueryParameter("license", "STRING", youtube.get("license")),
+                bigquery.ScalarQueryParameter(
+                    "channel", "STRING", youtube.get("channel")
+                ),
+                bigquery.ScalarQueryParameter(
+                    "publish_date", "DATE", yt_publish_date_date
+                ),
+                bigquery.ScalarQueryParameter(
+                    "license", "STRING", youtube.get("license")
+                ),
             )
             params.append(yt_param)
 
@@ -309,7 +357,9 @@ def main() -> None:
               AND COALESCE(is_deleted, FALSE) = TRUE
             """
 
-        bq.query(sql, job_config=bigquery.QueryJobConfig(query_parameters=params)).result()
+        bq.query(
+            sql, job_config=bigquery.QueryJobConfig(query_parameters=params)
+        ).result()
 
     else:
         # No existe registro previo, insertamos una nueva fila
