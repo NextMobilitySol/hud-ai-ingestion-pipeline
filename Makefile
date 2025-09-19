@@ -102,6 +102,35 @@ reactivate:
 	@if [ -z "$(WHO)" ]; then echo "Usage: make reactivate WHO='cli'"; exit 2; fi
 	$(PY) -m main reconcile --reactivate-deleted --who "$(WHO)" --upload-log
 
+# BigQuery: Vistas (views)
+.PHONY: views views-active views-review views-drop _apply_view bincheck
+
+# Helper: Sustituye @@PROJECT_ID@@ y @@BQ_DATASET@@ en un SQL y lo ejecuta en BigQuery
+# Uso: make _apply_view FILE=sql/views/v_archives_active.sql
+_apply_view:
+	@sed -e "s/@@PROJECT_ID@@/$$GCP_PROJECT/g" \
+	     -e "s/@@BQ_DATASET@@/$$BQ_DATASET/g" \
+	     "$(FILE)" | bq query --use_legacy_sql=false >/dev/null
+	@echo "[OK] Applied view from $(FILE)"
+
+# Crea/actualiza la vista de activos consumibles
+views-active:
+	@$(MAKE) _apply_view FILE=sql/views/v_archives_active.sql
+
+# Crea/actualiza la vista de revisión
+views-review:
+	@$(MAKE) _apply_view FILE=sql/views/v_archives_review.sql
+
+# Crea/actualiza ambas vistas
+views: views-active views-review
+	@echo "[DONE] v_archives_active and v_archives_review views are up to date"
+
+# (Opcional) Eliminar vistas si se necesita rehacer desde cero
+views-drop: bincheck check-bq
+	@echo "DROP VIEW IF EXISTS \`$$GCP_PROJECT.$$BQ_DATASET.v_archives_active\`;"  | bq query --use_legacy_sql=false >/dev/null || true
+	@echo "DROP VIEW IF EXISTS \`$$GCP_PROJECT.$$BQ_DATASET.v_archives_review\`;" | bq query --use_legacy_sql=false >/dev/null || true
+	@echo "[DONE] Eliminated views if they existed"
+
 # Limpieza: Elimino cachés y artefactos de compilación para dejar el repositorio limpio
 .PHONY: clean
 clean:

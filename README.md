@@ -18,7 +18,7 @@ El sistema implementa un control integral sobre los datos en las fases de:
 * [Configuración y requisitos](#configuración-y-requisitos)
 * [Uso — CLI unificada](#uso--cli-unificada)
 * [Makefile](#makefile)
-* [Reglas de reconciliación](#reglas-de-reconciliación)
+* [Serving Views & Looker Studio](#serving-views--looker-studio)
 * [Observabilidad y auditoría](#observabilidad-y-auditoría)
 * [Seguridad y permisos](#seguridad-y-permisos)
 * [Hoja de ruta](#hoja-de-ruta)
@@ -83,6 +83,21 @@ Este proyecto materializa un *data loop* sencillo pero robusto:
 * Reporta también **huérfanos** (objeto en Lake sin fila activa en BQ).
 
 ![Arquiectura Reconciliación](docs/diagrams_rendered/hud_ingestion__reconcile_zip.png)
+
+### **Reglas de reconciliación**
+
+1. **Duplicado (ambiguous)** Mismo basename en $\geq 2$ rutas del Lake, entonces **no muta BQ**, solo reporta `ambiguous_in_gcs`.
+2. **Activo en BQ pero ausente en GCS**
+   * **Tombstone**: `is_deleted=TRUE`, `exists_in_gcs=FALSE`, `delete_reason`.
+3. **Existe en GCS pero flags/URI desalineados**
+   Corrige `exists_in_gcs=TRUE`, `gcs_uri` canónica y `gcs_generation_last`.
+4. **Tombstone en BQ y el archivo existe**
+   * `--include-deleted`: solo informe (`deleted_but_exists`).
+   * `--reactivate-deleted`: **reactiva** fila (`is_deleted=FALSE`, limpia motivos, alinea URI y generation).
+5. **Huérfano (objeto en Lake sin fila activa en BQ)**
+   Solo informe (`untracked_in_bq`); no inserta automáticamente.
+6. **Edge sin categoría (`archive/<zip>`)**
+   Se trata como ubicación válida; puede corregir flags/URI. Si además existe en una categoría, se considera **ambiguous**.
 
 ## **Modelo de datos**
 
@@ -227,20 +242,29 @@ make reconcile       # Aplica cambios y genera log en GCS
 make reactivate WHO="reconcile-cli"
 ```
 
-## Reglas de reconciliación
+## **Serving Views & Looker Studio**
 
-1. **Duplicado (ambiguous)** Mismo basename en $\geq 2$ rutas del Lake, entonces **no muta BQ**, solo reporta `ambiguous_in_gcs`.
-2. **Activo en BQ pero ausente en GCS**
-   * **Tombstone**: `is_deleted=TRUE`, `exists_in_gcs=FALSE`, `delete_reason`.
-3. **Existe en GCS pero flags/URI desalineados**
-   Corrige `exists_in_gcs=TRUE`, `gcs_uri` canónica y `gcs_generation_last`.
-4. **Tombstone en BQ y el archivo existe**
-   * `--include-deleted`: solo informe (`deleted_but_exists`).
-   * `--reactivate-deleted`: **reactiva** fila (`is_deleted=FALSE`, limpia motivos, alinea URI y generation).
-5. **Huérfano (objeto en Lake sin fila activa en BQ)**
-   Solo informe (`untracked_in_bq`); no inserta automáticamente.
-6. **Edge sin categoría (`archive/<zip>`)**
-   Se trata como ubicación válida; puede corregir flags/URI. Si además existe en una categoría, se considera **ambiguous**.
+Esta sección describe la **capa de servicio** que exponemos desde el **Data Warehouse (BigQuery)** y su **consumo analítico** en **Looker Studio**. El objetivo es ofrecer un **contrato de datos estable**, desacoplado de la tabla operativa, con **semántica clara**, **gobernanza** y buen **rendimiento** para cuadros de mando.
+
+### **Serving Views**
+
+* **`Archives Active`**: Capa de lectura “gold” para **activos consumibles**. Solo expone registros **no eliminados** y con **existencia física** confirmada en el Lake.
+  * **Uso principal:** Analítica operativa, reporting de ingesta, control de volumen y mix por origen/dataset.
+
+* **`Archives Review`**: Capa de **stewardship** para **incidencias** (p. ej., desalineación entre estado lógico y físico).
+  * **Uso principal:** calidad de datos, auditoría, listas de remediación.
+
+> **Contratos y gobernanza**
+>
+> * Las views son **read-only** y constituyen el **data contract** con analistas y aplicaciones.
+> * El equipo de datos mantiene **alineación** y **frescura** mediante el job de **reconciliación**.
+> * Accesos recomendados a nivel de **dataset** o **vista autorizada**, con visibilidad selectiva por rol.
+
+### **Conexión con Looker Studio**
+
+Looker Studio se usará como una **capa semántica ligera** sobre las vistas de BigQuery, trabajando en modo **conexión en vivo**. Se recomienda usar **filtros de fecha** y de campos como `origin` o `dataset` para reducir escaneos y mejorar la latencia. Si el volumen de datos crece, puede activarse **BI Engine** o generar vistas agregadas diarias para optimizar rendimiento.
+
+El tablero se organiza en filas temáticas: **KPIs ejecutivos** con métricas clave desde `Archives Active`; **trends temporales** para seguir la evolución de ZIPs, imágenes y tamaños; **distribuciones por origen/dataset** para análisis de bias y cobertura; y una sección de **lifecycle & quality** apoyada en `Archives Review` para auditar incidencias. Opcionalmente, se incluye un bloque específico para **YouTube**, con análisis por canal o licencia si aplica.
 
 ## **Observabilidad y auditoría**
 
