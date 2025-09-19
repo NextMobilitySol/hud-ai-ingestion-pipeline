@@ -12,8 +12,8 @@ El sistema implementa un control integral sobre los datos en las fases de:
 
 * [Visión general](#visión-general)
 * [Arquitectura](#arquitectura)
-* [Componentes](#componentes)
 * [Modelo de datos](#modelo-de-datos)
+* [Componentes](#componentes)
 * [Estructura del repositorio](#estructura-del-repositorio)
 * [Configuración y requisitos](#configuración-y-requisitos)
 * [Uso — CLI unificada](#uso--cli-unificada)
@@ -46,6 +46,22 @@ Este proyecto materializa un *data loop* sencillo pero robusto:
   * `logs/archive_reconcile/`
 
 ![Arquiectura Alto Nivel](docs/diagrams_rendered/hud_ingestion__architecture_general.png)
+
+## **Modelo de datos**
+
+El modelo de datos se articula en torno a una única tabla central en BigQuery que actúa como **índice lógico de artefactos**. Esta tabla se encuentra particionada por la fecha de ingesta (`ts_ingest`) y clusterizada por los atributos `dataset`, `origin` y `zip_name`, lo que facilita consultas eficientes y un acceso optimizado a la información.
+
+Los campos principales se agrupan en cuatro dimensiones:
+
+* **Identificación y estado**: incluye el nombre del archivo comprimido (`zip_name`), la ruta física en el Data Lake (`gcs_uri`), así como indicadores binarios que señalan si el artefacto existe en almacenamiento (`exists_in_gcs`) o si ha sido eliminado lógicamente (`is_deleted`). El campo `gcs_generation_last` registra la versión interna del objeto en GCS, garantizando consistencia frente a sobrescrituras.
+
+* **Procedencia y origen**: describe el contexto del artefacto mediante el campo `origin`, que puede tomar valores como `public`, `simulated`, `real` o `youtube`. También se recogen referencias externas (`source_url`) y el dataset lógico al que pertenece (`dataset`).
+
+* **Ingesta y características técnicas**: se capturan huellas digitales y métricas del archivo, como el hash criptográfico (`sha256_zip`), el tamaño en bytes (`zip_size_bytes`), el número de imágenes contenidas (`num_images`) y la marca temporal de ingesta (`ts_ingest`).
+
+* **Borrado lógico**: en los casos en que un artefacto es eliminado, se registra la fecha de borrado (`ts_deleted`), el motivo (`delete_reason`) y el responsable de la operación (`deleted_by`). Esto permite mantener un historial completo y auditable.
+
+* **Metadatos de YouTube (estructura opcional)**: para los artefactos procedentes de esta fuente se conserva información adicional, incluyendo identificador de vídeo, título, canal de origen, fecha de publicación y licencia. Estos datos permiten mantener trazabilidad con la fuente original del contenido: `youtube.video_id`, `youtube.title`, `youtube.channel`, `youtube.publish_date`, `youtube.license`.
 
 ## **Componentes**
 
@@ -98,22 +114,6 @@ Este proyecto materializa un *data loop* sencillo pero robusto:
    Solo informe (`untracked_in_bq`); no inserta automáticamente.
 6. **Edge sin categoría (`archive/<zip>`)**
    Se trata como ubicación válida; puede corregir flags/URI. Si además existe en una categoría, se considera **ambiguous**.
-
-## **Modelo de datos**
-
-El modelo de datos se articula en torno a una única tabla central en BigQuery que actúa como **índice lógico de artefactos**. Esta tabla se encuentra particionada por la fecha de ingesta (`ts_ingest`) y clusterizada por los atributos `dataset`, `origin` y `zip_name`, lo que facilita consultas eficientes y un acceso optimizado a la información.
-
-Los campos principales se agrupan en cuatro dimensiones:
-
-* **Identificación y estado**: incluye el nombre del archivo comprimido (`zip_name`), la ruta física en el Data Lake (`gcs_uri`), así como indicadores binarios que señalan si el artefacto existe en almacenamiento (`exists_in_gcs`) o si ha sido eliminado lógicamente (`is_deleted`). El campo `gcs_generation_last` registra la versión interna del objeto en GCS, garantizando consistencia frente a sobrescrituras.
-
-* **Procedencia y origen**: describe el contexto del artefacto mediante el campo `origin`, que puede tomar valores como `public`, `simulated`, `real` o `youtube`. También se recogen referencias externas (`source_url`) y el dataset lógico al que pertenece (`dataset`).
-
-* **Ingesta y características técnicas**: se capturan huellas digitales y métricas del archivo, como el hash criptográfico (`sha256_zip`), el tamaño en bytes (`zip_size_bytes`), el número de imágenes contenidas (`num_images`) y la marca temporal de ingesta (`ts_ingest`).
-
-* **Borrado lógico**: en los casos en que un artefacto es eliminado, se registra la fecha de borrado (`ts_deleted`), el motivo (`delete_reason`) y el responsable de la operación (`deleted_by`). Esto permite mantener un historial completo y auditable.
-
-* **Metadatos de YouTube (estructura opcional)**: para los artefactos procedentes de esta fuente se conserva información adicional, incluyendo identificador de vídeo, título, canal de origen, fecha de publicación y licencia. Estos datos permiten mantener trazabilidad con la fuente original del contenido: `youtube.video_id`, `youtube.title`, `youtube.channel`, `youtube.publish_date`, `youtube.license`.
 
 ## **Estructura del repositorio**
 
